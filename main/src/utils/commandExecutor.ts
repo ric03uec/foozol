@@ -2,6 +2,7 @@ import { execSync as nodeExecSync, ExecSyncOptions, ExecSyncOptionsWithStringEnc
 import { promisify } from 'util';
 import { getShellPath } from './shellPath';
 import { WSLContext, wrapCommandForWSL } from './wslUtils';
+import { getWSLContext } from './wslExecutionContext';
 
 const nodeExecAsync = promisify(exec);
 
@@ -24,13 +25,15 @@ class CommandExecutor {
     const silentMode = extendedOptions?.silent === true;
 
     // Handle WSL command wrapping
+    // Priority: explicit parameter > AsyncLocalStorage context > none
     let actualCommand = command;
     let actualOptions = extendedOptions;
 
-    if (wslContext) {
+    const effectiveWslContext = wslContext ?? getWSLContext();
+    if (effectiveWslContext) {
       // Extract cwd for WSL (it's a Linux path)
       const wslCwd = typeof cwd === 'string' ? cwd : undefined;
-      actualCommand = wrapCommandForWSL(command, wslContext.distribution, wslCwd);
+      actualCommand = wrapCommandForWSL(command, effectiveWslContext.distribution, wslCwd);
       // WSL handles cwd internally, remove it from options
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { cwd: _cwd, silent: _silent, ...cleanOptions } = extendedOptions || {};
@@ -85,13 +88,15 @@ class CommandExecutor {
     const cwd = options?.cwd || process.cwd();
 
     // Handle WSL command wrapping
+    // Priority: explicit parameter > AsyncLocalStorage context > none
     let actualCommand = command;
     let actualOptions = options;
 
-    if (wslContext) {
+    const effectiveWslContext = wslContext ?? getWSLContext();
+    if (effectiveWslContext) {
       // Extract cwd for WSL (it's a Linux path)
       const wslCwd = typeof cwd === 'string' ? cwd : undefined;
-      actualCommand = wrapCommandForWSL(command, wslContext.distribution, wslCwd);
+      actualCommand = wrapCommandForWSL(command, effectiveWslContext.distribution, wslCwd);
       // WSL handles cwd internally, remove it from options
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { cwd: _cwd, ...cleanOptions } = options || {};
