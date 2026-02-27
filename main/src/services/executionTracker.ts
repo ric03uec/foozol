@@ -9,6 +9,7 @@ import { formatForDisplay } from '../utils/timestampUtils';
 import { commitManager } from './commitManager';
 import type { CommitModeSettings } from '../../../shared/types';
 import { getWSLContextFromProject } from '../utils/wslUtils';
+import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
 
 interface ExecutionContext {
   sessionId: string;
@@ -128,14 +129,19 @@ export class ExecutionTracker extends EventEmitter {
       
       console.log(`[ExecutionTracker] Final commit mode for session ${sessionId}: ${commitMode}`);
       this.logger?.verbose(`Final commit mode for session ${sessionId}: ${commitMode}`);
-      
-      // Handle post-prompt commit based on mode
-      const commitResult = await commitManager.handlePostPromptCommit(
-        sessionId,
-        context.worktreePath,
-        commitModeSettings,
-        context.prompt,
-        context.executionSequence
+
+      // Get WSL context for git operations
+      const wslContext = this.getWSLContextForSession(sessionId);
+
+      // Handle post-prompt commit based on mode (wrapped in WSL context)
+      const commitResult = await runWithWSLContextAsync(wslContext, () =>
+        commitManager.handlePostPromptCommit(
+          sessionId,
+          context.worktreePath,
+          commitModeSettings,
+          context.prompt,
+          context.executionSequence
+        )
       );
       
       console.log(`[ExecutionTracker] Commit result:`, commitResult);
@@ -158,19 +164,20 @@ export class ExecutionTracker extends EventEmitter {
       // For structured mode, we may need to wait for Claude to create the commit
       if (commitMode === 'structured') {
         this.logger?.verbose(`Waiting for structured commit from Claude...`);
-        const structuredCommitResult = await commitManager.waitForStructuredCommit(
-          sessionId,
-          context.worktreePath,
-          5000 // 5 second timeout for now, can be adjusted
+        const structuredCommitResult = await runWithWSLContextAsync(wslContext, () =>
+          commitManager.waitForStructuredCommit(
+            sessionId,
+            context.worktreePath,
+            5000 // 5 second timeout for now, can be adjusted
+          )
         );
-        
+
         if (!structuredCommitResult.success) {
           this.logger?.warn(`Structured commit not detected: ${structuredCommitResult.error}`);
         }
       }
-      
-      // Get the current commit hash after auto-commit
-      const wslContext = this.getWSLContextForSession(sessionId);
+
+      // Get the current commit hash after auto-commit (wslContext already set above)
       const afterCommitHash = this.gitDiffManager.getCurrentCommitHash(context.worktreePath, wslContext);
 
       let executionDiff: GitDiffResult;

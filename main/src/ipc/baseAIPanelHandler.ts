@@ -3,6 +3,7 @@ import { AbstractAIPanelManager } from '../services/panels/ai/AbstractAIPanelMan
 import { panelManager } from '../services/panelManager';
 import type { AppServices } from './types';
 import type { ToolPanelType, ToolPanel, BaseAIPanelState } from '../../../shared/types/panels';
+import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
 
 export interface AIPanelHandlerConfig {
   panelType: ToolPanelType;
@@ -127,8 +128,13 @@ export abstract class BaseAIPanelHandler {
         // Save the user input as a conversation message with panel_id
         sessionManager.addPanelConversationMessage(panelId, 'user', input);
 
-        // Send input via the panel manager
-        this.panelManager.sendInputToPanel(panelId, input);
+        // Get WSL context for the session
+        const wslContext = sessionManager.getWSLContextForSession(panel.sessionId);
+
+        // Send input via the panel manager (wrapped in WSL context for any git operations)
+        await runWithWSLContextAsync(wslContext, async () => {
+          this.panelManager.sendInputToPanel(panelId, input);
+        });
 
         // Update panel state
         const updatedState = {

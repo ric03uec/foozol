@@ -46,6 +46,7 @@ import { withLock } from '../utils/mutex';
 import * as os from 'os';
 import { panelManager } from './panelManager';
 import type { AnalyticsManager } from './analyticsManager';
+import { WSLContext, getWSLContextFromProject } from '../utils/wslUtils';
 
 export class SessionManager extends EventEmitter {
   private activeSessions: Map<string, Session> = new Map();
@@ -183,6 +184,17 @@ export class SessionManager extends EventEmitter {
       return this.getProjectById(dbSession.project_id);
     }
     return undefined;
+  }
+
+  /**
+   * Get the WSL execution context for a session.
+   * Combines getProjectForSession and getWSLContextFromProject in a single call.
+   * Returns null if session not found or project is not WSL-enabled.
+   */
+  getWSLContextForSession(sessionId: string): WSLContext | null {
+    const project = this.getProjectForSession(sessionId);
+    if (!project) return null;
+    return getWSLContextFromProject(project);
   }
 
   initializeFromDatabase(): void {

@@ -10,6 +10,8 @@ import type { GitDiffManager } from './gitDiffManager';
 import { GitStatusLogger } from './gitStatusLogger';
 import { GitFileWatcher } from './gitFileWatcher';
 import { fastCheckWorkingDirectory, fastGetAheadBehind, fastGetDiffStats } from './gitPlumbingCommands';
+import { runWithWSLContextAsync, getWSLContext } from '../utils/wslExecutionContext';
+import { linuxToUNCPath, posixJoin } from '../utils/wslUtils';
 
 interface GitStatusCache {
   [sessionId: string]: {
@@ -604,29 +606,34 @@ export class GitStatusManager extends EventEmitter {
    * Fetch git status for a session
    */
   private async fetchGitStatus(sessionId: string): Promise<GitStatus | null> {
-    // Create abort controller for this operation
-    const abortController = new AbortController();
-    this.abortControllers.set(sessionId, abortController);
-    
-    try {
-      const session = await this.sessionManager.getSession(sessionId);
-      if (!session || !session.worktreePath) {
-        this.abortControllers.delete(sessionId);
-        return null;
-      }
-      
-      // Check if operation was cancelled
-      if (abortController.signal.aborted) {
-        this.abortControllers.delete(sessionId);
-        return null;
-      }
-      
-      this.gitLogger.logSessionFetch(sessionId, false);
+    // Get WSL context for this session - all git commands will use it automatically
+    const wslContext = this.sessionManager.getWSLContextForSession(sessionId);
 
-      const project = this.sessionManager.getProjectForSession(sessionId);
-      if (!project?.path) {
-        return null;
-      }
+    // Wrap all git operations in WSL context for automatic command wrapping
+    return runWithWSLContextAsync(wslContext, async () => {
+      // Create abort controller for this operation
+      const abortController = new AbortController();
+      this.abortControllers.set(sessionId, abortController);
+
+      try {
+        const session = await this.sessionManager.getSession(sessionId);
+        if (!session || !session.worktreePath) {
+          this.abortControllers.delete(sessionId);
+          return null;
+        }
+
+        // Check if operation was cancelled
+        if (abortController.signal.aborted) {
+          this.abortControllers.delete(sessionId);
+          return null;
+        }
+
+        this.gitLogger.logSessionFetch(sessionId, false);
+
+        const project = this.sessionManager.getProjectForSession(sessionId);
+        if (!project?.path) {
+          return null;
+        }
 
       // Use fast plumbing commands for initial checks
       const quickStatus = fastCheckWorkingDirectory(session.worktreePath);
@@ -678,8 +685,20 @@ export class GitStatusManager extends EventEmitter {
       let isRebasing = false;
       
       // Check for rebase in progress using filesystem APIs
-      const rebaseMergeExists = existsSync(join(session.worktreePath, '.git', 'rebase-merge'));
-      const rebaseApplyExists = existsSync(join(session.worktreePath, '.git', 'rebase-apply'));
+      // For WSL projects, convert paths to UNC format for Windows fs access
+      const wslCtx = getWSLContext();
+      let rebaseMergePath: string;
+      let rebaseApplyPath: string;
+      if (wslCtx) {
+        // Use posixJoin for Linux paths, then convert to UNC
+        rebaseMergePath = linuxToUNCPath(posixJoin(session.worktreePath, '.git', 'rebase-merge'), wslCtx.distribution);
+        rebaseApplyPath = linuxToUNCPath(posixJoin(session.worktreePath, '.git', 'rebase-apply'), wslCtx.distribution);
+      } else {
+        rebaseMergePath = join(session.worktreePath, '.git', 'rebase-merge');
+        rebaseApplyPath = join(session.worktreePath, '.git', 'rebase-apply');
+      }
+      const rebaseMergeExists = existsSync(rebaseMergePath);
+      const rebaseApplyExists = existsSync(rebaseApplyPath);
       isRebasing = rebaseMergeExists || rebaseApplyExists;
 
       // Determine the overall state and secondary states
@@ -759,6 +778,7 @@ export class GitStatusManager extends EventEmitter {
         lastChecked: new Date().toISOString()
       };
     }
+    }); // End runWithWSLContextAsync
   }
 
   /**

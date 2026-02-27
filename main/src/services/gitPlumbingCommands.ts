@@ -1,5 +1,21 @@
 import { execSync, ExtendedExecSyncOptions } from '../utils/commandExecutor';
 import * as fs from 'fs';
+import * as path from 'path';
+import { getWSLContext } from '../utils/wslExecutionContext';
+import { linuxToUNCPath, posixJoin } from '../utils/wslUtils';
+
+/**
+ * Get the filesystem-accessible path for the given cwd.
+ * If running in WSL context on Windows, converts Linux path to UNC path.
+ */
+function getFsAccessiblePath(cwd: string): string {
+  const wslContext = getWSLContext();
+  if (wslContext) {
+    // Convert Linux path to UNC path for Windows fs access
+    return linuxToUNCPath(cwd, wslContext.distribution);
+  }
+  return cwd;
+}
 
 /**
  * Optimized git commands using plumbing (low-level) commands
@@ -28,7 +44,7 @@ export function fastCheckWorkingDirectory(cwd: string): GitIndexStatus {
   // Check if the directory exists before attempting git operations
   // This prevents ENOENT errors when worktrees have been deleted (e.g., /tmp cleanup)
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     // Directory doesn't exist - return safe defaults
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
@@ -98,7 +114,7 @@ export function fastCheckWorkingDirectory(cwd: string): GitIndexStatus {
 export function fastGetAheadBehind(cwd: string, baseBranch: string): { ahead: number; behind: number } {
   // Check if the directory exists before attempting git operations
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
     return { ahead: 0, behind: 0 };
@@ -124,7 +140,7 @@ export function fastGetAheadBehind(cwd: string, baseBranch: string): { ahead: nu
 export function fastGetDiffStats(cwd: string): { additions: number; deletions: number; filesChanged: number } {
   // Check if the directory exists before attempting git operations
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
     return { additions: 0, deletions: 0, filesChanged: 0 };
@@ -164,7 +180,7 @@ export function fastGetDiffStats(cwd: string): { additions: number; deletions: n
 export function isPathModified(cwd: string, path: string): boolean {
   // Check if the directory exists before attempting git operations
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
     return false;
@@ -184,7 +200,7 @@ export function isPathModified(cwd: string, path: string): boolean {
 export function getCurrentBranch(cwd: string): string | null {
   // Check if the directory exists before attempting git operations
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
     return null;
@@ -208,17 +224,27 @@ export function getCurrentBranch(cwd: string): string | null {
 export function isRebasing(cwd: string): boolean {
   // Check if the directory exists before attempting git operations
   try {
-    fs.accessSync(cwd, fs.constants.F_OK);
+    fs.accessSync(getFsAccessiblePath(cwd), fs.constants.F_OK);
   } catch {
     console.warn(`[GitPlumbing] Directory does not exist: ${cwd}`);
     return false;
   }
 
-  try {
-    // Check for rebase directories
-    execSync('test -d .git/rebase-merge || test -d .git/rebase-apply', { cwd });
-    return true;
-  } catch {
-    return false;
+  // Check for rebase directories using fs.existsSync with WSL-aware paths
+  // This avoids using shell 'test -d' which fails on Windows
+  const wslContext = getWSLContext();
+  let rebaseMergePath: string;
+  let rebaseApplyPath: string;
+
+  if (wslContext) {
+    // Use posixJoin for Linux paths, then convert to UNC for fs access
+    rebaseMergePath = linuxToUNCPath(posixJoin(cwd, '.git', 'rebase-merge'), wslContext.distribution);
+    rebaseApplyPath = linuxToUNCPath(posixJoin(cwd, '.git', 'rebase-apply'), wslContext.distribution);
+  } else {
+    // Use native path.join for non-WSL
+    rebaseMergePath = path.join(cwd, '.git', 'rebase-merge');
+    rebaseApplyPath = path.join(cwd, '.git', 'rebase-apply');
   }
+
+  return fs.existsSync(rebaseMergePath) || fs.existsSync(rebaseApplyPath);
 }

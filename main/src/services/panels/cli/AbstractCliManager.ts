@@ -9,6 +9,7 @@ import type { ConfigManager } from '../../configManager';
 import type { ConversationMessage } from '../../../database/models';
 import { getShellPath, findExecutableInPath } from '../../../utils/shellPath';
 import { findNodeExecutable } from '../../../utils/nodeFinder';
+import { getWSLContext } from '../../../utils/wslExecutionContext';
 
 interface CliProcess {
   process: pty.IPty;
@@ -590,13 +591,44 @@ export abstract class AbstractCliManager extends EventEmitter {
     this.logger?.verbose(`Executing ${this.getCliToolName()} command: ${fullCommand}`);
     this.logger?.verbose(`Working directory: ${cwd}`);
 
+    // Check if we're running in WSL context (Windows with WSL project)
+    const wslContext = getWSLContext();
+    if (wslContext && os.platform() === 'win32') {
+      this.logger?.verbose(`[${this.getCliToolName()}] WSL context detected, spawning inside WSL`);
+      // Spawn the CLI tool inside WSL using wsl.exe
+      // Use --cd to set the working directory (must be Linux path format, not UNC)
+      // The wslContext.linuxPath contains the project's Linux path
+      // But cwd here is the worktreePath which should also be in Linux format for WSL projects
+      // If cwd is a UNC path (\\wsl.localhost\...), we need to extract the Linux path
+      let wslCwd = cwd;
+      if (cwd.startsWith('\\\\wsl')) {
+        // Convert UNC path back to Linux path
+        // \\wsl.localhost\Ubuntu\home\user -> /home/user
+        const match = cwd.match(/\\\\wsl[^\\]*\\[^\\]+(.+)/);
+        if (match) {
+          wslCwd = match[1].replace(/\\/g, '/');
+        }
+      }
+      const wslArgs = ['-d', wslContext.distribution, '--cd', wslCwd, '--', command, ...args];
+      this.logger?.verbose(`[${this.getCliToolName()}] WSL command: wsl.exe ${wslArgs.join(' ')}`);
+
+      const ptyProcess = pty.spawn('wsl.exe', wslArgs, {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 30,
+        // Don't set cwd for wsl.exe - it handles it internally via --cd
+        env
+      });
+      return ptyProcess;
+    }
+
     let ptyProcess: pty.IPty;
     let spawnAttempt = 0;
     let lastError: unknown;
     const toolName = this.getCliToolName().toLowerCase();
     const needsNodeFallbackKey = `${toolName}NeedsNodeFallback`;
 
-    // On Windows, always use Node.js fallback because:
+    // On Windows (non-WSL), always use Node.js fallback because:
     // 1. npm bin stubs are shell scripts that node-pty can't execute directly (error 193)
     // 2. Even if we could execute them, they use relative paths that break when cwd differs
     if (os.platform() === 'win32') {

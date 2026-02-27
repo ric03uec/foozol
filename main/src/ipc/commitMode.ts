@@ -7,6 +7,8 @@ import type { DatabaseService } from '../database/database';
 import type { Logger } from '../utils/logger';
 import type { SessionManager } from '../services/sessionManager';
 import type { Session } from '../types/session';
+import { getWSLContextFromProject } from '../utils/wslUtils';
+import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
 
 export function registerCommitModeHandlers(db: DatabaseService, logger?: Logger, sessionManager?: SessionManager): void {
   // Get project characteristics for commit mode detection
@@ -123,12 +125,17 @@ export function registerCommitModeHandlers(db: DatabaseService, logger?: Logger,
       if (!project) {
         throw new Error('Project not found');
       }
-      
-      const result = await commitManager.finalizeSession(
-        sessionId,
-        session.worktree_path,
-        project.path, // Using project path as main branch for now
-        options
+
+      // Get WSL context for git operations
+      const wslContext = getWSLContextFromProject(project);
+
+      const result = await runWithWSLContextAsync(wslContext, () =>
+        commitManager.finalizeSession(
+          sessionId,
+          session.worktree_path,
+          project.path, // Using project path as main branch for now
+          options
+        )
       );
       
       if (result.success) {
