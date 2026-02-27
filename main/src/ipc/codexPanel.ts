@@ -7,6 +7,7 @@ import type { AppServices } from './types';
 import type { CodexPanelState } from '../../../shared/types/panels';
 import { DEFAULT_CODEX_MODEL } from '../../../shared/types/models';
 import type { ConversationMessage } from '../database/models';
+import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
 
 // Singleton instances will be created in the register function
 export let codexManager: CodexManager;
@@ -73,7 +74,11 @@ class CodexPanelHandler extends BaseAIPanelHandler {
           // If a prompt is provided, start the Codex process
           if (prompt) {
             logger?.info(`[codex-debug] Starting Codex process with initial prompt`);
-            await (this.panelManager as CodexPanelManager).startPanel(panelId, worktreePath, prompt);
+            // Get WSL context for the session
+            const wslContext = sessionManager.getWSLContextForSession(sessionId);
+            await runWithWSLContextAsync(wslContext, () =>
+              (this.panelManager as CodexPanelManager).startPanel(panelId, worktreePath, prompt)
+            );
           } else {
             logger?.info(`[codex-debug] No initial prompt provided, panel registered but not started`);
           }
@@ -100,17 +105,23 @@ class CodexPanelHandler extends BaseAIPanelHandler {
         
         // Save the user prompt as a conversation message with panel_id
         sessionManager.addPanelConversationMessage(panelId, 'user', prompt);
-        
-        await (this.panelManager as CodexPanelManager).startPanel(
-          panelId,
-          worktreePath,
-          prompt,
-          options?.model,
-          options?.modelProvider,
-          options?.approvalPolicy,
-          options?.sandboxMode,
-          options?.webSearch,
-          options?.thinkingLevel
+
+        // Get the panel to find session for WSL context
+        const panel = panelManager.getPanel(panelId);
+        const wslContext = panel ? sessionManager.getWSLContextForSession(panel.sessionId) : null;
+
+        await runWithWSLContextAsync(wslContext, () =>
+          (this.panelManager as CodexPanelManager).startPanel(
+            panelId,
+            worktreePath,
+            prompt,
+            options?.model,
+            options?.modelProvider,
+            options?.approvalPolicy,
+            options?.sandboxMode,
+            options?.webSearch,
+            options?.thinkingLevel
+          )
         );
         
         // Save settings to unified database storage
@@ -177,18 +188,24 @@ class CodexPanelHandler extends BaseAIPanelHandler {
         
         // Save the new user prompt as a conversation message
         sessionManager.addPanelConversationMessage(panelId, 'user', prompt);
-        
-        await (this.panelManager as CodexPanelManager).continuePanel(
-          panelId,
-          worktreePath,
-          prompt,
-          conversationHistory,
-          options?.model,
-          options?.modelProvider,
-          options?.thinkingLevel,
-          undefined, // approvalPolicy - not used for now
-          options?.sandboxMode,
-          options?.webSearch
+
+        // Get the panel to find session for WSL context
+        const panel = panelManager.getPanel(panelId);
+        const wslContext = panel ? sessionManager.getWSLContextForSession(panel.sessionId) : null;
+
+        await runWithWSLContextAsync(wslContext, () =>
+          (this.panelManager as CodexPanelManager).continuePanel(
+            panelId,
+            worktreePath,
+            prompt,
+            conversationHistory,
+            options?.model,
+            options?.modelProvider,
+            options?.thinkingLevel,
+            undefined, // approvalPolicy - not used for now
+            options?.sandboxMode,
+            options?.webSearch
+          )
         );
         
         // Get existing settings from database
@@ -219,11 +236,11 @@ class CodexPanelHandler extends BaseAIPanelHandler {
         
         // Save to database
         databaseService.updatePanelSettings(panelId, settingsToUpdate);
-        
+
         // Also update panel state for runtime tracking
-        const panel = panelManager.getPanel(panelId);
-        if (panel) {
-          const currentCustomState = panel.state.customState as CodexPanelState;
+        const currentPanel = panelManager.getPanel(panelId);
+        if (currentPanel) {
+          const currentCustomState = currentPanel.state.customState as CodexPanelState;
           const updatedState: CodexPanelState = {
             ...currentCustomState,
             lastPrompt: prompt,
@@ -242,12 +259,12 @@ class CodexPanelHandler extends BaseAIPanelHandler {
           
           await panelManager.updatePanel(panelId, {
             state: {
-              ...panel.state,
+              ...currentPanel.state,
               customState: updatedState
             }
           });
         }
-        
+
         return { success: true };
       } catch (error) {
         logger?.error(`[codex-debug] Failed to continue panel ${panelId}:`, error as Error);

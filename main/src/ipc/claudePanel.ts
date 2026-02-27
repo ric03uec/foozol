@@ -5,6 +5,7 @@ import { ClaudePanelManager } from '../services/panels/claude/claudePanelManager
 import { panelManager } from '../services/panelManager';
 import { ClaudePanelState } from '../../../shared/types/panels';
 import type { SessionOutput } from '../database/models';
+import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
 
 let claudePanelManager: ClaudePanelManager;
 
@@ -65,13 +66,18 @@ class ClaudePanelHandler extends BaseAIPanelHandler {
           modelToUse = (typeof settings?.model === 'string' ? settings.model : null) || configManager.getDefaultModel() || 'auto';
         }
 
-        // Start Claude via the panel manager
-        await (this.panelManager as ClaudePanelManager).startPanel(
-          panelId, 
-          session.worktreePath, 
-          prompt, 
-          undefined, // permissionMode 
-          modelToUse
+        // Get WSL context for the session
+        const wslContext = sessionManager.getWSLContextForSession(session.id);
+
+        // Start Claude via the panel manager (wrapped in WSL context)
+        await runWithWSLContextAsync(wslContext, () =>
+          (this.panelManager as ClaudePanelManager).startPanel(
+            panelId,
+            session.worktreePath,
+            prompt,
+            undefined, // permissionMode
+            modelToUse
+          )
         );
         
         // Update panel state
@@ -104,17 +110,22 @@ class ClaudePanelHandler extends BaseAIPanelHandler {
         }
 
         // Get conversation history
-        const conversationHistory = sessionManager.getPanelConversationMessages ? 
+        const conversationHistory = sessionManager.getPanelConversationMessages ?
           sessionManager.getPanelConversationMessages(panelId) :
           sessionManager.getConversationMessages(panel.sessionId);
 
-        // Continue via the panel manager
-        await (this.panelManager as ClaudePanelManager).continuePanel(
-          panelId, 
-          session.worktreePath, 
-          prompt || '', 
-          conversationHistory, 
-          model
+        // Get WSL context for the session
+        const wslContext = sessionManager.getWSLContextForSession(session.id);
+
+        // Continue via the panel manager (wrapped in WSL context)
+        await runWithWSLContextAsync(wslContext, () =>
+          (this.panelManager as ClaudePanelManager).continuePanel(
+            panelId,
+            session.worktreePath,
+            prompt || '',
+            conversationHistory,
+            model
+          )
         );
         
         // Update panel state

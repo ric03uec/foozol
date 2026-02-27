@@ -10,7 +10,8 @@ import type { GitDiffManager } from './gitDiffManager';
 import { GitStatusLogger } from './gitStatusLogger';
 import { GitFileWatcher } from './gitFileWatcher';
 import { fastCheckWorkingDirectory, fastGetAheadBehind, fastGetDiffStats } from './gitPlumbingCommands';
-import { runWithWSLContextAsync } from '../utils/wslExecutionContext';
+import { runWithWSLContextAsync, getWSLContext } from '../utils/wslExecutionContext';
+import { linuxToUNCPath, posixJoin } from '../utils/wslUtils';
 
 interface GitStatusCache {
   [sessionId: string]: {
@@ -684,8 +685,20 @@ export class GitStatusManager extends EventEmitter {
       let isRebasing = false;
       
       // Check for rebase in progress using filesystem APIs
-      const rebaseMergeExists = existsSync(join(session.worktreePath, '.git', 'rebase-merge'));
-      const rebaseApplyExists = existsSync(join(session.worktreePath, '.git', 'rebase-apply'));
+      // For WSL projects, convert paths to UNC format for Windows fs access
+      const wslCtx = getWSLContext();
+      let rebaseMergePath: string;
+      let rebaseApplyPath: string;
+      if (wslCtx) {
+        // Use posixJoin for Linux paths, then convert to UNC
+        rebaseMergePath = linuxToUNCPath(posixJoin(session.worktreePath, '.git', 'rebase-merge'), wslCtx.distribution);
+        rebaseApplyPath = linuxToUNCPath(posixJoin(session.worktreePath, '.git', 'rebase-apply'), wslCtx.distribution);
+      } else {
+        rebaseMergePath = join(session.worktreePath, '.git', 'rebase-merge');
+        rebaseApplyPath = join(session.worktreePath, '.git', 'rebase-apply');
+      }
+      const rebaseMergeExists = existsSync(rebaseMergePath);
+      const rebaseApplyExists = existsSync(rebaseApplyPath);
       isRebasing = rebaseMergeExists || rebaseApplyExists;
 
       // Determine the overall state and secondary states
